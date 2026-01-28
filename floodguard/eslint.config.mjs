@@ -10,7 +10,10 @@ const eslintConfig = defineConfig([
   {
     rules: {
       "@typescript-eslint/no-explicit-any": "error", // 'any' use karna mana hai
-      "no-unused-vars": "warn"
+      "no-unused-vars": "warn",
+      "no-console": "warn",       
+      "semi": ["error", "always"], 
+      "quotes": ["error", "double"] 
     }
   },
   globalIgnores([
