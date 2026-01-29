@@ -228,6 +228,132 @@ The current Docker setup is optimized for local development. For production:
 - Configure proper logging and monitoring
 - Set up backup strategies for database volumes
 
+## PostgreSQL Schema Design
+
+FloodGuard uses a **normalized relational schema** in PostgreSQL, defined with [Prisma](https://www.prisma.io/). The schema supports users, monitored locations, flood alerts, water-level readings, and user subscriptions to locations for alerts.
+
+### Entity-Relationship Overview
+
+```
+User (1) ──< UserLocationSubscription >── (N) Location
+Location (1) ──< Alert (N)
+Location (1) ──< FloodReading (N)
+```
+
+| Entity | Description |
+|--------|-------------|
+| **User** | Registered user or team member; can subscribe to locations and receive alerts. |
+| **Location** | Monitored geographic area (name, region, lat/long). |
+| **UserLocationSubscription** | Many-to-many: which users receive alerts for which locations. |
+| **Alert** | Flood alert for a location (severity, message, timestamp). |
+| **FloodReading** | Water level reading for a location (e.g. from sensor or manual). |
+
+### Prisma Schema Excerpt
+
+Core models and relations (see `prisma/schema.prisma` for full schema):
+
+```prisma
+model User {
+  id             Int       @id @default(autoincrement())
+  name           String
+  email          String    @unique
+  passwordHash   String?   @map("password_hash")
+  telegramChatId String?   @map("telegram_chat_id")
+  subscriptions  UserLocationSubscription[]
+}
+
+model Location {
+  id        Int      @id @default(autoincrement())
+  name      String
+  region    String
+  latitude  Decimal  @db.Decimal(10, 7)
+  longitude Decimal  @db.Decimal(10, 7)
+  @@unique([name, region])
+  subscriptions UserLocationSubscription[]
+  alerts        Alert[]
+  readings      FloodReading[]
+}
+
+model UserLocationSubscription {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  locationId Int      @map("location_id")
+  user       User     @relation(...)
+  location   Location @relation(...)
+  @@unique([userId, locationId])
+}
+
+model Alert {
+  id         Int          @id @default(autoincrement())
+  locationId Int          @map("location_id")
+  severity   AlertSeverity  // enum: LOW, MEDIUM, HIGH, CRITICAL
+  message    String
+  location   Location     @relation(...)
+}
+
+model FloodReading {
+  id           Int      @id @default(autoincrement())
+  locationId   Int      @map("location_id")
+  waterLevelCm Int      @map("water_level_cm")
+  recordedAt   DateTime @map("recorded_at")
+  location     Location @relation(...)
+}
+```
+
+### Keys, Constraints, and Relationships
+
+- **Primary keys (PK):** Every table has an `id` (auto-increment integer) as PK.
+- **Foreign keys (FK):**  
+  - `UserLocationSubscription.userId` → `User.id`, `locationId` → `Location.id`  
+  - `Alert.locationId` → `Location.id`  
+  - `FloodReading.locationId` → `Location.id`  
+  All use `onDelete: Cascade` so deleting a user or location cleans up related rows.
+- **Unique constraints:**  
+  - `User.email`  
+  - `Location.(name, region)`  
+  - `UserLocationSubscription.(userId, locationId)` (one subscription per user per location).
+- **Indexes:** On FKs (`userId`, `locationId`), and on frequently queried columns (`email`, `region`, `name`, `createdAt`, `severity`, `recordedAt`) to support fast lookups and filters.
+
+### Normalization (1NF, 2NF, 3NF)
+
+- **1NF:** All attributes are atomic (no repeating groups; e.g. one email per user, one water level per reading).
+- **2NF:** No partial dependency on PK; non-key attributes (e.g. `name`, `severity`, `message`) depend on the full primary key of their table.
+- **3NF:** No transitive dependency; we avoid storing derived or redundant data (e.g. we store `locationId` in alerts/readings and join to `Location` for name/region instead of duplicating them).
+
+Redundancy is avoided by storing each fact in one place (e.g. location details only in `Location`, subscriptions only in `UserLocationSubscription`).
+
+### Migrations and Seed
+
+Ensure PostgreSQL is running (e.g. `docker compose up -d db`) and `DATABASE_URL` in `.env` is correct. Then:
+
+```bash
+# Generate Prisma Client
+npm run db:generate
+
+# Create and apply migrations (run after schema changes)
+npx prisma migrate dev --name init_schema
+
+# Seed sample data (users, locations, subscriptions, alerts, readings)
+npm run db:seed
+
+# Verify in browser (Prisma Studio)
+npm run db:studio
+```
+
+After running the seed, you can confirm in Prisma Studio that `users`, `locations`, `user_location_subscriptions`, `alerts`, and `flood_readings` exist and contain sample rows.
+
+### Why This Design Supports Scalability and Common Queries
+
+- **Scalability:** Indexes on FKs and query columns keep joins and filters fast as data grows. Normalized schema avoids duplication and keeps updates consistent. Adding new locations, users, or readings does not require schema changes.
+- **Common queries the schema supports:**
+  - List alerts for a location (index on `locationId`, `createdAt`).
+  - List users subscribed to a location (index on `locationId` in `UserLocationSubscription`).
+  - List locations a user is subscribed to (index on `userId`).
+  - Latest flood readings per location (index on `locationId`, `recordedAt`).
+  - Filter alerts by severity (index on `severity`).
+
+For assignment tracking and git commands for this deliverable, see `assignments/2.13-postgresql-schema-design.md`.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
