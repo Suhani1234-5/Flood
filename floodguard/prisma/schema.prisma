@@ -1,0 +1,106 @@
+// FloodGuard - PostgreSQL Schema
+// Normalized relational schema for flood monitoring and alerts
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums (domain constraints)
+// ---------------------------------------------------------------------------
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// ---------------------------------------------------------------------------
+// Core Entities
+// ---------------------------------------------------------------------------
+
+/// Registered user or team member; can subscribe to locations and receive alerts.
+model User {
+  id             Int       @id @default(autoincrement())
+  name           String
+  email          String    @unique
+  passwordHash   String?   @map("password_hash")
+  telegramChatId String?   @map("telegram_chat_id") // For Telegram bot alerts
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  subscriptions UserLocationSubscription[]
+  @@index([email])
+  @@map("users")
+}
+
+/// Monitored geographic location (region/area) for flood tracking.
+model Location {
+  id        Int      @id @default(autoincrement())
+  name      String
+  region    String
+  latitude  Decimal  @db.Decimal(10, 7)
+  longitude Decimal  @db.Decimal(10, 7)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  subscriptions UserLocationSubscription[]
+  alerts        Alert[]
+  readings      FloodReading[]
+  @@unique([name, region])
+  @@index([region])
+  @@index([name])
+  @@map("locations")
+}
+
+/// Join table: users subscribe to locations to receive flood alerts (many-to-many).
+model UserLocationSubscription {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  locationId Int      @map("location_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, locationId])
+  @@index([userId])
+  @@index([locationId])
+  @@map("user_location_subscriptions")
+}
+
+/// Flood alert issued for a location (e.g. from sensor or manual).
+model Alert {
+  id         Int          @id @default(autoincrement())
+  locationId Int          @map("location_id")
+  severity   AlertSeverity
+  message    String
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([locationId])
+  @@index([createdAt])
+  @@index([severity])
+  @@map("alerts")
+}
+
+/// Water level / flood reading for a location (e.g. from sensor or manual entry).
+model FloodReading {
+  id          Int      @id @default(autoincrement())
+  locationId  Int      @map("location_id")
+  waterLevelCm Int     @map("water_level_cm") // Water level in centimeters
+  recordedAt  DateTime @default(now()) @map("recorded_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([locationId])
+  @@index([recordedAt])
+  @@map("flood_readings")
+}
