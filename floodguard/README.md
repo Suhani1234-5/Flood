@@ -354,6 +354,119 @@ After running the seed, you can confirm in Prisma Studio that `users`, `location
 
 For assignment tracking and git commands for this deliverable, see `assignments/2.13-postgresql-schema-design.md`.
 
+## Prisma ORM Setup & Client Initialisation
+
+Prisma ORM is the **data layer** for FloodGuard: it connects the Next.js app to PostgreSQL, provides a type-safe client for all database queries, and keeps the schema in sync with migrations. This section describes how Prisma is installed, initialised, and used in the project.
+
+### Purpose of Prisma in This Project
+
+- **Single source of truth:** The `prisma/schema.prisma` file defines all models, relations, and constraints. Migrations keep the database in sync with the schema.
+- **Type-safe queries:** The generated Prisma Client exposes typed methods (`prisma.user.findMany()`, etc.), so TypeScript catches mistakes at compile time.
+- **Connection management:** A singleton client in `src/lib/prisma.ts` is reused across the app, avoiding multiple connections and ensuring consistent behaviour in development and production.
+
+### Setup Steps
+
+1. **Install and initialise Prisma** (already done in this repo):
+   ```bash
+   npm install prisma --save-dev
+   npm install @prisma/client
+   npx prisma init
+   ```
+   This creates the `prisma/` folder and `schema.prisma`, and expects `DATABASE_URL` in `.env`.
+
+2. **Define models** in `prisma/schema.prisma` (see [PostgreSQL Schema Design](#postgresql-schema-design) and the snippet below).
+
+3. **Generate the Prisma Client** after any schema change:
+   ```bash
+   npx prisma generate
+   # or
+   npm run db:generate
+   ```
+
+4. **Connect Prisma to the app** via the singleton in `src/lib/prisma.ts` (see snippet below). Import `prisma` from this file everywhere you need to run queries.
+
+5. **Test the connection:** Start the app and call an endpoint that uses Prisma (e.g. `GET /api/users`). See [Test the connection](#test-the-connection) below.
+
+### Schema and Client Snippets
+
+**Datasource and generator** (`prisma/schema.prisma`):
+
+```prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  name      String
+  email     String    @unique
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  // ... relations
+}
+```
+
+**Client initialisation** (`src/lib/prisma.ts`):
+
+```ts
+import { PrismaClient } from '@prisma/client';
+
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+```
+
+This keeps a single Prisma instance in development (stored on `globalThis`) so hot reloads do not create multiple connections.
+
+### Test the Connection
+
+1. Ensure PostgreSQL is running (e.g. `docker compose up -d db`) and `DATABASE_URL` in `.env` is correct.
+2. Run migrations and seed if you have not already:
+   ```bash
+   npx prisma migrate dev --name init_schema
+   npm run db:seed
+   ```
+3. Start the app:
+   ```bash
+   npm run dev
+   ```
+4. Open [http://localhost:3000/api/users](http://localhost:3000/api/users) in the browser or with `curl`.
+
+**Expected response when the connection works:**
+
+```json
+{
+  "success": true,
+  "message": "Database connection successful",
+  "count": 2,
+  "users": [
+    { "id": 1, "name": "Alice", "email": "alice@floodguard.example", "createdAt": "..." },
+    { "id": 2, "name": "Bob", "email": "bob@floodguard.example", "createdAt": "..." }
+  ]
+}
+```
+
+If the database is unreachable, you will get a `500` response with `"success": false` and an error message. In the terminal running `npm run dev`, Prisma will log queries when you hit `/api/users`, confirming the client is connected.
+
+### Reflection: Type Safety, Query Reliability, and Developer Productivity
+
+- **Type safety:** Prisma generates TypeScript types from the schema. Property names, relation names, and enums are checked at compile time, so typos and wrong field types are caught before runtime. Refactoring is safer because the compiler flags every place that needs updating.
+- **Query reliability:** Queries are built with a fluent API (`findMany`, `findUnique`, `create`, etc.) instead of raw SQL strings, reducing injection risks and schema drift. Relations are loaded explicitly with `include` or `select`, so it is clear what data each query returns.
+- **Developer productivity:** One schema file drives migrations, the client, and types. Prisma Studio (`npm run db:studio`) gives a quick way to inspect and edit data. The same client is used in API routes, server components, and server actions, so the data layer is consistent across the app.
+
+For assignment tracking and git commands for this deliverable, see `assignments/2.14-prisma-orm-setup.md`.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
